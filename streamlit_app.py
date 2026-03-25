@@ -168,7 +168,9 @@ st.caption(f"Mode actif : **{mode_label}**")
 try:
     git_sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
     git_dt = subprocess.check_output(["git", "show", "-s", "--format=%ci", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
-    st.caption(f"Commit: {git_sha} — {git_dt}")
+    # enlever le suffixe timezone (ex. "+0000") pour un affichage plus propre
+    git_dt_clean = git_dt.rsplit(' ', 1)[0] if git_dt else git_dt
+    st.caption(f"Commit: {git_sha} — {git_dt_clean}")
 except Exception:
     pass
 st.divider()
