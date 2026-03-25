@@ -71,21 +71,12 @@ def build_prolongement(individu, nom, prenom, poste, direction, sup,
                         date_entree, date_fin_1ere, titre="Mme", is_female=True):
     """Génère le message de prolongement de période d'essai."""
     collab = "collaboratrice" if is_female else "collaborateur"
-    hdr = "\t".join([
-        titre, "NOM", "PRENOM", "FONCTION",
-        "CHANTIER CTRL PRES", "SUP ", "DATE D'EMBAUCHE",
-        "DATE FIN  1ERE PERIODE D'ESSAI"
-    ])
-    data_row = "\t".join([
-        str(individu), nom, prenom, poste, direction, sup,
-        date_entree.strftime("%Y-%m-%d"),
-        date_fin_1ere.strftime("%d/%m/%Y"),
-    ])
+    # Le tableau est affiché séparément dans l'UI; ici on garde uniquement le texte du message
     return (
         "Bonjour , \n\n"
         f"Nous vous informons que la {collab} mentionné(e) ci-dessous "
         "arrive à la fin de leur première période d'essai.\n\n"
-        f"{hdr}\n{data_row}\n\n"
+        "Veuillez trouver ci-dessous les informations du collaborateur sous forme de tableau.\n\n"
         "Pouvez-vous nous confirmer si vous les considérez aptes à bénéficier "
         "d'une prolongation de leur période d'essai ?\n"
         "Nous vous prions de bien vouloir nous répondre par retour de mail.\n\n"
