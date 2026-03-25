@@ -119,6 +119,8 @@ def auto_map_columns(columns):
             mapping.setdefault("SUP", col)
         elif "DATE" in cu and ("ENTREE" in cu or "EMBAUCHE" in cu):
             mapping.setdefault("DATE_ENTREE", col)
+        elif ("RENOUVEL" in cu and "DATE" in cu) or cu in ("RENOUVELLEMENTDATE", "DATERENOUVELLEMENT"):
+            mapping.setdefault("DATE_RENOUVELLEMENT", col)
         elif cu in ("INDIVIDU", "MATRICULE", "MAT", "MLE", "MLLE"):
             mapping.setdefault("INDIVIDU", col)
         elif cu in ("CIVILITE", "TITRE", "CIVIL", "CIVILITÉ"):
@@ -173,16 +175,7 @@ with st.sidebar:
     )
     is_titularisation = msg_type.startswith("📄")
 
-    st.divider()
-    st.subheader("Durée période d'essai")
-    d1_days = st.number_input(
-        "1ère période (jours)", value=45, min_value=1, max_value=365,
-        help="Nombre de jours pour la 1ère période d'essai (défaut : 45)"
-    )
-    d_total_months = st.number_input(
-        "Durée totale (mois)", value=3, min_value=1, max_value=24,
-        help="Durée totale avant titularisation (défaut : 3 mois)"
-    )
+    st.caption("La durée d'essai est calculée automatiquement depuis DATE ENTREE et Renouvellement Date.")
 
     st.divider()
     default_civ = st.selectbox(
@@ -211,7 +204,7 @@ st.divider()
 
 # ── ÉTAPE 1 : Import ────────────────────────────────────────
 st.subheader("① Importer la liste des collaborateurs")
-st.caption("Colonnes attendues : NOM · PRENOM · LIB/POSTE · LIB80/DIRECTION · SUP · DATE ENTREE (+ optionnel : INDIVIDU · CIVILITE · EMAIL)")
+st.caption("Colonnes attendues : NOM · PRENOM · LIB/POSTE · DATE ENTREE · Renouvellement Date (+ optionnel : LIB80/DIRECTION · SUP · INDIVIDU · CIVILITE · EMAIL)")
 
 uploaded = st.file_uploader(
     "Charger le fichier Excel ou CSV",
@@ -235,42 +228,36 @@ if uploaded:
     with st.expander("📊 Aperçu du fichier importé", expanded=False):
         st.dataframe(df, use_container_width=True)
 
-    # ── ÉTAPE 2 : Correspondance colonnes ───────────────────
-    st.subheader("② Correspondance des colonnes")
     detected = auto_map_columns(df.columns.tolist())
-    available = ["— Non défini —"] + df.columns.tolist()
+    col_nom = detected.get("NOM")
+    col_prenom = detected.get("PRENOM")
+    col_lib = detected.get("LIB")
+    col_lib80 = detected.get("LIB80")
+    col_sup = detected.get("SUP")
+    col_date = detected.get("DATE_ENTREE")
+    col_date_renouv = detected.get("DATE_RENOUVELLEMENT")
+    col_individu = detected.get("INDIVIDU")
+    col_civ = detected.get("CIVILITE")
+    col_email = detected.get("EMAIL")
 
-    def col_select(label, key, required=True):
-        default_val = detected.get(key, "— Non défini —")
-        idx = available.index(default_val) if default_val in available else 0
-        sel = st.selectbox(
-            label + (" \\*" if required else " _(optionnel)_"),
-            available,
-            index=idx,
-            key=f"colmap_{key}",
-        )
-        return None if sel == "— Non défini —" else sel
+    missing_required = []
+    if not col_nom:
+        missing_required.append("NOM")
+    if not col_prenom:
+        missing_required.append("PRENOM")
+    if not col_lib:
+        missing_required.append("LIB/POSTE")
+    if not col_date:
+        missing_required.append("DATE ENTREE")
+    if not col_date_renouv:
+        missing_required.append("Renouvellement Date")
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        col_nom      = col_select("NOM", "NOM", required=True)
-        col_prenom   = col_select("PRÉNOM", "PRENOM", required=True)
-        col_lib      = col_select("POSTE / FONCTION", "LIB", required=True)
-    with c2:
-        col_lib80    = col_select("DIRECTION / CHANTIER", "LIB80", required=False)
-        col_sup      = col_select("SUP (Responsable hiérarchique)", "SUP", required=False)
-        col_date     = col_select("DATE D'ENTRÉE EN FONCTION", "DATE_ENTREE", required=True)
-    with c3:
-        col_individu = col_select("MATRICULE / INDIVIDU", "INDIVIDU", required=False)
-        col_civ      = col_select("CIVILITÉ (M./Mme/Mlle)", "CIVILITE", required=False)
-        col_email    = col_select("EMAIL destinataire", "EMAIL", required=False)
-
-    required_ok = all([col_nom, col_prenom, col_lib, col_date])
+    required_ok = len(missing_required) == 0
     if not required_ok:
-        st.error("⚠️ Les colonnes **NOM**, **PRÉNOM**, **POSTE** et **DATE D'ENTRÉE** sont obligatoires.")
+        st.error("⚠️ Colonnes obligatoires introuvables : " + ", ".join(missing_required))
 
-    # ── ÉTAPE 3 : Pièce jointe ──────────────────────────────
-    st.subheader("③ Pièce jointe email (optionnel)")
+    # ── ÉTAPE 2 : Pièce jointe ──────────────────────────────
+    st.subheader("② Pièce jointe email (optionnel)")
 
     ATTACHMENT_TITUL = "/workspaces/Nabil/FR EPE - HICHMINE Mohamed Topographe.xlsx"
     ATTACHMENT_PROLONG = "/workspaces/Nabil/Model PERIODE ESSAI NV.xlsx"
@@ -282,17 +269,25 @@ if uploaded:
         default_att_path = ATTACHMENT_PROLONG
         att_label = "Modèle Période d'Essai (Model PERIODE ESSAI NV.xlsx)"
 
-    use_default_att = st.checkbox(
-        f"Utiliser **{os.path.basename(default_att_path)}** comme pièce jointe",
-        value=os.path.exists(default_att_path),
-    )
+    use_default_att = os.path.exists(default_att_path)
     custom_att = None
-    if not use_default_att:
-        custom_att = st.file_uploader(
-            "Charger une autre pièce jointe",
-            type=["xlsx", "xls", "pdf", "doc", "docx"],
-            key="custom_att",
+
+    if is_titularisation:
+        if use_default_att:
+            st.info(f"La pièce jointe est générée automatiquement : {os.path.basename(default_att_path)}")
+        else:
+            st.warning(f"Fichier par défaut introuvable : {default_att_path}")
+    else:
+        use_default_att = st.checkbox(
+            f"Utiliser **{os.path.basename(default_att_path)}** comme pièce jointe",
+            value=use_default_att,
         )
+        if not use_default_att:
+            custom_att = st.file_uploader(
+                "Charger une autre pièce jointe",
+                type=["xlsx", "xls", "pdf", "doc", "docx"],
+                key="custom_att",
+            )
 
     def get_attachment():
         if custom_att:
@@ -302,8 +297,8 @@ if uploaded:
                 return f.read(), os.path.basename(default_att_path)
         return None, None
 
-    # ── ÉTAPE 4 : Génération ────────────────────────────────
-    st.subheader("④ Générer les messages")
+    # ── ÉTAPE 3 : Génération ────────────────────────────────
+    st.subheader("③ Générer les messages")
 
     if required_ok and st.button("🚀 Générer les messages", type="primary", use_container_width=True):
         messages, subjects, email_dests, errors = [], [], [], []
@@ -322,12 +317,24 @@ if uploaded:
                 titre, is_f = get_gender_info(civ_val, default_civ)
 
                 date_entree = parse_date(row[col_date])
+                date_renouvellement = parse_date(row[col_date_renouv])
                 if date_entree is None:
                     errors.append(f"Ligne {idx + 2} — date invalide pour {nom} {prenom}")
                     messages.append(""); subjects.append(""); email_dests.append("")
                     continue
+                if date_renouvellement is None:
+                    errors.append(f"Ligne {idx + 2} — Renouvellement Date invalide pour {nom} {prenom}")
+                    messages.append(""); subjects.append(""); email_dests.append("")
+                    continue
 
-                date_fin_1ere, date_tit = calc_end_dates(date_entree, d1_days, d_total_months)
+                duree_essai_jours = (date_renouvellement - date_entree).days
+                if duree_essai_jours < 0:
+                    errors.append(f"Ligne {idx + 2} — Renouvellement Date antérieure à DATE ENTREE pour {nom} {prenom}")
+                    messages.append(""); subjects.append(""); email_dests.append("")
+                    continue
+
+                date_fin_1ere = date_entree + timedelta(days=duree_essai_jours)
+                date_tit = date_entree + timedelta(days=duree_essai_jours)
 
                 if is_titularisation:
                     msg  = build_titularisation(nom, prenom, poste, date_entree, date_tit, titre, is_f)
@@ -394,7 +401,7 @@ if uploaded:
             )
 
             st.divider()
-            st.subheader("⑤ Messages générés")
+            st.subheader("④ Messages générés")
 
             for i, msg, subj, email_dest in valid:
                 row = df_gen.iloc[i]
@@ -405,13 +412,13 @@ if uploaded:
                     label += f"  —  {email_dest}"
 
                 with st.expander(label, expanded=False):
+                    st.caption(f"**Objet proposé :** {subj}")
                     edited = st.text_area(
                         "✏️ Message (modifiable avant envoi)",
                         value=msg,
                         height=300,
                         key=f"msg_edit_{i}",
                     )
-                    st.caption(f"**Objet proposé :** {subj}")
 
                     if email_configured and email_dest:
                         if st.button(f"📤 Envoyer cet email", key=f"send_one_{i}"):
@@ -470,9 +477,8 @@ else:
 
         1. Choisissez le **type de message** dans la barre latérale
         2. **Importez** votre fichier Excel / CSV avec les colonnes collaborateurs
-        3. Vérifiez la **correspondance des colonnes**
-        4. Cliquez sur **Générer les messages**
-        5. **Téléchargez** le fichier texte ou **envoyez** directement par email
+        3. Cliquez sur **Générer les messages**
+        4. **Téléchargez** le fichier texte ou **envoyez** directement par email
 
         ---
         **Colonnes supportées dans votre fichier :**
@@ -483,6 +489,7 @@ else:
         | PRENOM | Prénom | ✅ |
         | LIB / POSTE | Intitulé du poste | ✅ |
         | DATE ENTREE | Date d'entrée en fonction | ✅ |
+        | Renouvellement Date | Date de fin d'essai calculée | ✅ |
         | LIB80 / DIRECTION | Direction / Chantier | — |
         | SUP | Nom du responsable hiérarchique | — |
         | INDIVIDU / MAT | Matricule | — |
