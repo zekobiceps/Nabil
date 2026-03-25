@@ -3,6 +3,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 import os
 from pathlib import Path
+from openpyxl import load_workbook
+import io as _io
 
 # ═══════════════════════════════════════════════════════════
 # CONFIG
@@ -254,19 +256,47 @@ if uploaded:
                 key="custom_att",
             )
 
-    def get_attachment_for_recipient(nom, prenom):
-        if is_titularisation:
-            if os.path.exists(default_att_path):
-                with open(default_att_path, "rb") as f:
-                    content = f.read()
+    def get_attachment_for_recipient(nom, prenom, poste=None, direction=None, sup=None, date_entree=None, date_tit=None):
+        """Retourne un fichier binaire xlsx personnalisé pour le collaborateur.
+
+        Si le template existe, on le charge, on remplace des valeurs d'exemple
+        par les valeurs fournies et on renvoie le fichier modifié en mémoire.
+        """
+        # cas titularisation : on personnalise à partir du template
+        if is_titularisation and os.path.exists(default_att_path):
+            try:
+                wb = load_workbook(default_att_path)
+                replacements = {
+                    "HICHMINE": nom or "",
+                    "Mohamed": prenom or "",
+                    "Topographe": poste or "",
+                    "TOARC 4 Tronçon 2": direction or "",
+                    "15/09/2025": date_tit.strftime('%d/%m/%Y') if isinstance(date_tit, (datetime,)) else (date_tit or ""),
+                    "EL OUANASS Hamza": sup or "",
+                }
+                for ws in wb.worksheets:
+                    for row in ws.iter_rows():
+                        for cell in row:
+                            if isinstance(cell.value, str):
+                                val = cell.value
+                                for token, repl in replacements.items():
+                                    if token in val and repl is not None:
+                                        val = val.replace(token, str(repl))
+                                cell.value = val
+
+                bio = _io.BytesIO()
+                wb.save(bio)
+                bio.seek(0)
                 safe_nom = "_".join(nom.split()) if nom else "NOM"
                 safe_prenom = "_".join(prenom.split()) if prenom else "PRENOM"
                 fname = f"FR_EPE_{safe_nom}_{safe_prenom}.xlsx"
-                return content, fname
-            return None, None
+                return bio.read(), fname
+            except Exception:
+                return None, None
 
+        # cas prolongement ou fichier custom
         if custom_att:
-            return custom_att.getvalue(), custom_att.name
+            return custom_att.read(), custom_att.name
         if use_default_att and os.path.exists(default_att_path):
             with open(default_att_path, "rb") as f:
                 return f.read(), os.path.basename(default_att_path)
@@ -329,7 +359,9 @@ if uploaded:
         st.session_state["subjects"]   = subjects
         st.session_state["df_gen"]     = df
         st.session_state["gen_cols"]   = {
-            "nom": col_nom, "prenom": col_prenom
+            "nom": col_nom, "prenom": col_prenom,
+            "poste": col_lib, "direction": col_lib80, "sup": col_sup,
+            "date": col_date, "date_renouv": col_date_renouv,
         }
         if errors:
             st.warning("⚠️ Erreurs détectées :\n" + "\n".join(errors))
@@ -390,7 +422,13 @@ if uploaded:
                     )
 
                     if is_titularisation:
-                        att_b_preview, att_n_preview = get_attachment_for_recipient(n, p)
+                        # récupérer les autres champs depuis le DF pour personnaliser l'attachement
+                        poste_val = get_safe_str(row, gen_cols.get("poste"))
+                        direction_val = get_safe_str(row, gen_cols.get("direction"))
+                        sup_val = get_safe_str(row, gen_cols.get("sup"))
+                        date_entree_val = parse_date(row.get(gen_cols.get("date"))) if gen_cols.get("date") else None
+                        date_tit_val = parse_date(row.get(gen_cols.get("date_renouv"))) if gen_cols.get("date_renouv") else None
+                        att_b_preview, att_n_preview = get_attachment_for_recipient(n, p, poste=poste_val, direction=direction_val, sup=sup_val, date_entree=date_entree_val, date_tit=date_tit_val)
                         if att_b_preview and att_n_preview:
                             st.download_button(
                                 "📎 Télécharger la pièce jointe générée",
