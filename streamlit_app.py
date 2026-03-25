@@ -155,11 +155,7 @@ with st.sidebar:
     st.caption("La durée d'essai est calculée automatiquement depuis DATE ENTREE et Renouvellement Date.")
 
     st.divider()
-    default_civ = st.selectbox(
-        "Civilité par défaut",
-        ["Mme", "M.", "Mlle"],
-        help="Utilisée si la colonne CIVILITE est absente du fichier"
-    )
+    # Civilité supprimée — ne plus demander la civilité par défaut
 
 # ═══════════════════════════════════════════════════════════
 # PAGE PRINCIPALE
@@ -171,7 +167,7 @@ st.divider()
 
 # ── ÉTAPE 1 : Import ────────────────────────────────────────
 st.subheader("① Importer la liste des collaborateurs")
-st.caption("Colonnes attendues : NOM · PRENOM · LIB/POSTE · DATE ENTREE · Renouvellement Date (+ optionnel : LIB80/DIRECTION · SUP · INDIVIDU · CIVILITE · EMAIL)")
+st.caption("Colonnes attendues : NOM · PRENOM · LIB/POSTE · DATE ENTREE · Renouvellement Date (+ optionnel : LIB80/DIRECTION · SUP · INDIVIDU · EMAIL)")
 
 uploaded = st.file_uploader(
     "Charger le fichier Excel ou CSV",
@@ -204,7 +200,7 @@ if uploaded:
     col_date = detected.get("DATE_ENTREE")
     col_date_renouv = detected.get("DATE_RENOUVELLEMENT")
     col_individu = detected.get("INDIVIDU")
-    col_civ = detected.get("CIVILITE")
+    # civilité supprimée — on ne détecte plus la colonne CIVILITE
 
     missing_required = []
     if not col_nom:
@@ -316,9 +312,8 @@ if uploaded:
                 direction = get_safe_str(row, col_lib80)
                 sup       = get_safe_str(row, col_sup)
                 individu  = get_safe_str(row, col_individu)
-
-                civ_val   = row[col_civ] if col_civ and pd.notna(row.get(col_civ, None)) else default_civ
-                titre, is_f = get_gender_info(civ_val, default_civ)
+                # civilité supprimée — on utilise la valeur par défaut de get_gender_info
+                titre, is_f = get_gender_info(None)
 
                 date_entree = parse_date(row[col_date])
                 date_renouvellement = parse_date(row[col_date_renouv])
@@ -464,7 +459,6 @@ else:
         | LIB80 / DIRECTION | Direction / Chantier | — |
         | SUP | Nom du responsable hiérarchique | — |
         | INDIVIDU / MAT | Matricule | — |
-        | CIVILITE | M. / Mme / Mlle | — |
         | EMAIL | Email du destinataire | — |
         """
     )
