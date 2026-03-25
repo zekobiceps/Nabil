@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as _date
+import subprocess
 import os
 from pathlib import Path
 from openpyxl import load_workbook
@@ -29,7 +30,11 @@ def parse_date(v):
     except TypeError:
         pass
     try:
-        return pd.to_datetime(v)
+        ts = pd.to_datetime(v, errors='coerce')
+        if pd.isna(ts):
+            return None
+        # retourner un objet date sans composante temps
+        return ts.date()
     except (ValueError, TypeError):
         return None
 
@@ -167,6 +172,14 @@ st.session_state["last_mode"] = is_titularisation
 st.title("📋 Générateur — Fin de Période d'Essai")
 mode_label = "Titularisation" if is_titularisation else "Prolongement Période d'Essai"
 st.caption(f"Mode actif : **{mode_label}**")
+
+# Afficher le dernier commit et sa date/heure si disponible
+try:
+    git_sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+    git_dt = subprocess.check_output(["git", "show", "-s", "--format=%ci", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+    st.caption(f"Commit: {git_sha} — {git_dt}")
+except Exception:
+    pass
 st.divider()
 
 # ── ÉTAPE 1 : Import ────────────────────────────────────────
@@ -185,6 +198,16 @@ if uploaded:
         else:
             df = pd.read_excel(uploaded, engine="openpyxl" if uploaded.name.endswith("xlsx") else None)
         df = df.dropna(how="all").reset_index(drop=True)
+
+        # Normaliser les colonnes de type date pour enlever la composante heure
+        for c in df.columns:
+            cu = c.upper()
+            if "DATE" in cu and any(tok in cu for tok in ("ENTREE", "RENOUVEL", "TITUL", "TITULARISATION", "FIN")):
+                try:
+                    df[c] = pd.to_datetime(df[c], errors='coerce').dt.date
+                except Exception:
+                    # si la conversion échoue, laisser la colonne telle quelle
+                    pass
     except Exception as e:
         st.error(f"❌ Impossible de lire le fichier : {e}")
         st.stop()
@@ -252,7 +275,7 @@ if uploaded:
                     "Mohamed": prenom or "",
                     "Topographe": poste or "",
                     "TOARC 4 Tronçon 2": direction or "",
-                    "15/09/2025": date_tit.strftime('%d/%m/%Y') if isinstance(date_tit, (datetime,)) else (date_tit or ""),
+                    "15/09/2025": (date_tit.strftime('%d/%m/%Y') if hasattr(date_tit, 'strftime') else (str(date_tit) if date_tit else "")),
                     "EL OUANASS Hamza": sup or "",
                 }
                 for ws in wb.worksheets:
@@ -283,8 +306,8 @@ if uploaded:
                 return f.read(), os.path.basename(default_att_path)
         return None, None
 
-    # ── ÉTAPE 3 : Génération ────────────────────────────────
-    st.subheader("③ Générer les messages")
+    # ── ÉTAPE 2 : Génération ────────────────────────────────
+    st.subheader("② Générer les messages")
 
     if required_ok and st.button("🚀 Générer les messages", type="primary", use_container_width=True):
         messages, subjects, errors = [], [], []
@@ -346,7 +369,7 @@ if uploaded:
         if errors:
             st.warning("⚠️ Erreurs détectées :\n" + "\n".join(errors))
 
-    # ── ÉTAPE 5 : Résultats ─────────────────────────────────
+    # ── ÉTAPE 3 : Résultats ─────────────────────────────────
     if "messages" in st.session_state and st.session_state["messages"]:
         messages    = st.session_state["messages"]
         subjects    = st.session_state["subjects"]
@@ -360,7 +383,8 @@ if uploaded:
         if not valid:
             st.error("Aucun message n'a pu être généré. Vérifiez le fichier importé.")
         else:
-            st.success(f"✅ **{len(valid)} message(s) généré(s)**")
+            # notification de synthèse supprimée (affichage détaillé dans la section Messages générés)
+            pass
 
             # Bouton téléchargement global
             all_text = ""
@@ -378,7 +402,7 @@ if uploaded:
             # téléchargement global supprimé (bouton .txt retiré)
 
             st.divider()
-            st.subheader("④ Messages générés")
+            st.subheader("③ Messages générés")
 
             for i, msg, subj in valid:
                 row = df_gen.iloc[i]
@@ -388,6 +412,36 @@ if uploaded:
 
                 with st.expander(label, expanded=False):
                     st.caption(f"**Objet proposé :** {subj}")
+
+                    # En mode prolongement, afficher les informations du collaborateur sous forme de tableau
+                    if not is_titularisation:
+                        titre_tab, _ = get_gender_info(None)
+                        poste_val = get_safe_str(row, gen_cols.get("poste"))
+                        direction_val = get_safe_str(row, gen_cols.get("direction"))
+                        sup_val = get_safe_str(row, gen_cols.get("sup"))
+                        date_entree_val = parse_date(row.get(gen_cols.get("date"))) if gen_cols.get("date") else None
+                        date_renouv_val = parse_date(row.get(gen_cols.get("date_renouv"))) if gen_cols.get("date_renouv") else None
+                        if date_entree_val and date_renouv_val:
+                            try:
+                                duree_essai_jours = (date_renouv_val - date_entree_val).days
+                                date_fin_1ere = date_entree_val + timedelta(days=duree_essai_jours)
+                            except Exception:
+                                date_fin_1ere = None
+                        else:
+                            date_fin_1ere = None
+
+                        table_row = {
+                            "Titre": titre_tab,
+                            "NOM": n,
+                            "PRENOM": p,
+                            "FONCTION": poste_val,
+                            "CHANTIER CTRL PRES": direction_val,
+                            "SUP": sup_val,
+                            "DATE D'EMBAUCHE": date_entree_val.strftime('%Y-%m-%d') if date_entree_val else "",
+                            "DATE FIN  1ERE PERIODE D'ESSAI": date_fin_1ere.strftime('%d/%m/%Y') if date_fin_1ere else "",
+                        }
+                        st.table(pd.DataFrame([table_row]))
+
                     edited = st.text_area(
                         "✏️ Message (modifiable avant envoi)",
                         value=msg,
@@ -420,10 +474,9 @@ else:
         """
         **Comment utiliser cet outil :**
 
-        1. Choisissez le **type de message** dans la barre latérale
-        2. **Importez** votre fichier Excel / CSV avec les colonnes collaborateurs
-        3. Cliquez sur **Générer les messages**
-        4. **Téléchargez** le fichier texte et les pièces jointes générées
+        1. Importez votre fichier Excel / CSV avec les colonnes collaborateurs
+        2. Cliquez sur **Générer les messages**
+        3. Consultez les **Messages générés** et téléchargez les pièces jointes
 
         ---
         **Colonnes supportées dans votre fichier :**
