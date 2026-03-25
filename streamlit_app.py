@@ -1,15 +1,8 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-from dateutil.relativedelta import relativedelta
-import io
-import smtplib
-import ssl
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from email.mime.base import MIMEBase
-from email import encoders
 import os
+from pathlib import Path
 
 # ═══════════════════════════════════════════════════════════
 # CONFIG
@@ -49,15 +42,6 @@ def get_gender_info(civ, default="Mme"):
     if "MLLE" in s or "MADEMOISELLE" in s:
         return "Mlle", True
     return "Mme", True  # Mme par défaut
-
-
-def calc_end_dates(date_entree, d1_days=45, d_total_months=3):
-    """Calcule (date_fin_1ere_periode, date_titularisation)."""
-    if date_entree is None:
-        return None, None
-    date_fin_1ere = date_entree + timedelta(days=d1_days)
-    date_tit = date_entree + relativedelta(months=d_total_months) - timedelta(days=1)
-    return date_fin_1ere, date_tit
 
 
 def build_titularisation(nom, prenom, poste, date_entree, date_fin,
@@ -130,28 +114,6 @@ def auto_map_columns(columns):
     return mapping
 
 
-def send_email_smtp(server, port, username, password, from_addr,
-                     to_addr, subject, body, att_bytes=None, att_name=None):
-    """Envoie un email via SMTP avec STARTTLS."""
-    msg = MIMEMultipart()
-    msg["From"] = from_addr
-    msg["To"] = to_addr
-    msg["Subject"] = subject
-    msg.attach(MIMEText(body, "plain", "utf-8"))
-    if att_bytes and att_name:
-        part = MIMEBase("application", "octet-stream")
-        part.set_payload(att_bytes)
-        encoders.encode_base64(part)
-        safe_name = att_name.replace('"', "")
-        part.add_header("Content-Disposition", f'attachment; filename="{safe_name}"')
-        msg.attach(part)
-    context = ssl.create_default_context()
-    with smtplib.SMTP(server, int(port), timeout=30) as smtp:
-        smtp.starttls(context=context)
-        smtp.login(username, password)
-        smtp.sendmail(from_addr, to_addr, msg.as_string())
-
-
 def get_safe_str(row, col):
     """Retourne une chaîne propre depuis une cellule du DataFrame."""
     if col is None:
@@ -160,6 +122,19 @@ def get_safe_str(row, col):
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return ""
     return str(v).strip()
+
+
+def resolve_attachment_path(exact_name, name_prefix=None):
+    """Résout un chemin de pièce jointe depuis le dossier de l'application."""
+    app_dir = Path(__file__).resolve().parent
+    exact = app_dir / exact_name
+    if exact.exists():
+        return str(exact)
+    if name_prefix:
+        for candidate in app_dir.glob(f"{name_prefix}*"):
+            if candidate.is_file():
+                return str(candidate)
+    return str(exact)
 
 
 # ═══════════════════════════════════════════════════════════
@@ -183,16 +158,6 @@ with st.sidebar:
         ["Mme", "M.", "Mlle"],
         help="Utilisée si la colonne CIVILITE est absente du fichier"
     )
-
-    st.divider()
-    with st.expander("📧 Configuration Email SMTP"):
-        smtp_server = st.text_input("Serveur SMTP", placeholder="smtp.gmail.com")
-        smtp_port = st.number_input("Port", value=587, min_value=1, max_value=65535)
-        smtp_user = st.text_input("Identifiant", placeholder="votre@email.com")
-        smtp_pass = st.text_input("Mot de passe", type="password")
-        smtp_from = st.text_input("Expéditeur (From)", placeholder="votre@email.com")
-
-    email_configured = all([smtp_server, smtp_user, smtp_pass, smtp_from])
 
 # ═══════════════════════════════════════════════════════════
 # PAGE PRINCIPALE
@@ -238,7 +203,6 @@ if uploaded:
     col_date_renouv = detected.get("DATE_RENOUVELLEMENT")
     col_individu = detected.get("INDIVIDU")
     col_civ = detected.get("CIVILITE")
-    col_email = detected.get("EMAIL")
 
     missing_required = []
     if not col_nom:
@@ -259,24 +223,25 @@ if uploaded:
     # ── ÉTAPE 2 : Pièce jointe ──────────────────────────────
     st.subheader("② Pièce jointe email (optionnel)")
 
-    ATTACHMENT_TITUL = "/workspaces/Nabil/FR EPE - HICHMINE Mohamed Topographe.xlsx"
-    ATTACHMENT_PROLONG = "/workspaces/Nabil/Model PERIODE ESSAI NV.xlsx"
+    ATTACHMENT_TITUL = resolve_attachment_path(
+        "FR EPE - HICHMINE Mohamed Topographe.xlsx",
+        name_prefix="FR EPE -",
+    )
+    ATTACHMENT_PROLONG = resolve_attachment_path(
+        "Model PERIODE ESSAI NV.xlsx",
+        name_prefix="Model PERIODE ESSAI",
+    )
 
     if is_titularisation:
         default_att_path = ATTACHMENT_TITUL
-        att_label = "Formulaire EPE (FR EPE…xlsx)"
     else:
         default_att_path = ATTACHMENT_PROLONG
-        att_label = "Modèle Période d'Essai (Model PERIODE ESSAI NV.xlsx)"
 
     use_default_att = os.path.exists(default_att_path)
     custom_att = None
 
     if is_titularisation:
-        if use_default_att:
-            st.info(f"La pièce jointe est générée automatiquement : {os.path.basename(default_att_path)}")
-        else:
-            st.warning(f"Fichier par défaut introuvable : {default_att_path}")
+        st.info("La pièce jointe est générée automatiquement pour chaque collaborateur après la section ④ Messages générés.")
     else:
         use_default_att = st.checkbox(
             f"Utiliser **{os.path.basename(default_att_path)}** comme pièce jointe",
@@ -289,9 +254,19 @@ if uploaded:
                 key="custom_att",
             )
 
-    def get_attachment():
+    def get_attachment_for_recipient(nom, prenom):
+        if is_titularisation:
+            if os.path.exists(default_att_path):
+                with open(default_att_path, "rb") as f:
+                    content = f.read()
+                safe_nom = "_".join(nom.split()) if nom else "NOM"
+                safe_prenom = "_".join(prenom.split()) if prenom else "PRENOM"
+                fname = f"FR_EPE_{safe_nom}_{safe_prenom}.xlsx"
+                return content, fname
+            return None, None
+
         if custom_att:
-            return custom_att.read(), custom_att.name
+            return custom_att.getvalue(), custom_att.name
         if use_default_att and os.path.exists(default_att_path):
             with open(default_att_path, "rb") as f:
                 return f.read(), os.path.basename(default_att_path)
@@ -301,7 +276,7 @@ if uploaded:
     st.subheader("③ Générer les messages")
 
     if required_ok and st.button("🚀 Générer les messages", type="primary", use_container_width=True):
-        messages, subjects, email_dests, errors = [], [], [], []
+        messages, subjects, errors = [], [], []
 
         for idx, row in df.iterrows():
             try:
@@ -311,7 +286,6 @@ if uploaded:
                 direction = get_safe_str(row, col_lib80)
                 sup       = get_safe_str(row, col_sup)
                 individu  = get_safe_str(row, col_individu)
-                email_dest = get_safe_str(row, col_email)
 
                 civ_val   = row[col_civ] if col_civ and pd.notna(row.get(col_civ, None)) else default_civ
                 titre, is_f = get_gender_info(civ_val, default_civ)
@@ -320,17 +294,17 @@ if uploaded:
                 date_renouvellement = parse_date(row[col_date_renouv])
                 if date_entree is None:
                     errors.append(f"Ligne {idx + 2} — date invalide pour {nom} {prenom}")
-                    messages.append(""); subjects.append(""); email_dests.append("")
+                    messages.append(""); subjects.append("")
                     continue
                 if date_renouvellement is None:
                     errors.append(f"Ligne {idx + 2} — Renouvellement Date invalide pour {nom} {prenom}")
-                    messages.append(""); subjects.append(""); email_dests.append("")
+                    messages.append(""); subjects.append("")
                     continue
 
                 duree_essai_jours = (date_renouvellement - date_entree).days
                 if duree_essai_jours < 0:
                     errors.append(f"Ligne {idx + 2} — Renouvellement Date antérieure à DATE ENTREE pour {nom} {prenom}")
-                    messages.append(""); subjects.append(""); email_dests.append("")
+                    messages.append(""); subjects.append("")
                     continue
 
                 date_fin_1ere = date_entree + timedelta(days=duree_essai_jours)
@@ -346,15 +320,13 @@ if uploaded:
 
                 messages.append(msg)
                 subjects.append(subj)
-                email_dests.append(email_dest)
 
             except Exception as e:
                 errors.append(f"Ligne {idx + 2} — {e}")
-                messages.append(""); subjects.append(""); email_dests.append("")
+                messages.append(""); subjects.append("")
 
         st.session_state["messages"]   = messages
         st.session_state["subjects"]   = subjects
-        st.session_state["email_dests"] = email_dests
         st.session_state["df_gen"]     = df
         st.session_state["gen_cols"]   = {
             "nom": col_nom, "prenom": col_prenom
@@ -366,12 +338,11 @@ if uploaded:
     if "messages" in st.session_state and st.session_state["messages"]:
         messages    = st.session_state["messages"]
         subjects    = st.session_state["subjects"]
-        email_dests = st.session_state["email_dests"]
         df_gen      = st.session_state["df_gen"]
         gen_cols    = st.session_state["gen_cols"]
 
-        valid = [(i, m, s, e)
-                 for i, (m, s, e) in enumerate(zip(messages, subjects, email_dests))
+        valid = [(i, m, s)
+                 for i, (m, s) in enumerate(zip(messages, subjects))
                  if m]
 
         if not valid:
@@ -381,7 +352,7 @@ if uploaded:
 
             # Bouton téléchargement global
             all_text = ""
-            for i, msg, subj, _ in valid:
+            for i, msg, subj in valid:
                 row = df_gen.iloc[i]
                 n = get_safe_str(row, gen_cols["nom"]).upper()
                 p = get_safe_str(row, gen_cols["prenom"])
@@ -403,13 +374,11 @@ if uploaded:
             st.divider()
             st.subheader("④ Messages générés")
 
-            for i, msg, subj, email_dest in valid:
+            for i, msg, subj in valid:
                 row = df_gen.iloc[i]
                 n = get_safe_str(row, gen_cols["nom"]).upper()
                 p = get_safe_str(row, gen_cols["prenom"])
                 label = f"👤  {n} {p}"
-                if email_dest:
-                    label += f"  —  {email_dest}"
 
                 with st.expander(label, expanded=False):
                     st.caption(f"**Objet proposé :** {subj}")
@@ -420,54 +389,18 @@ if uploaded:
                         key=f"msg_edit_{i}",
                     )
 
-                    if email_configured and email_dest:
-                        if st.button(f"📤 Envoyer cet email", key=f"send_one_{i}"):
-                            try:
-                                att_b, att_n = get_attachment()
-                                send_email_smtp(
-                                    smtp_server, smtp_port, smtp_user, smtp_pass,
-                                    smtp_from, email_dest, subj, edited, att_b, att_n,
-                                )
-                                st.success("✅ Email envoyé avec succès")
-                            except Exception as e:
-                                st.error(f"❌ Erreur envoi : {e}")
-                    elif email_dest and not email_configured:
-                        st.info("ℹ️ Configurez le SMTP dans la barre latérale pour envoyer par email.")
-                    elif not email_dest:
-                        st.caption("_Aucune adresse email renseignée pour ce collaborateur._")
-
-            # Envoi groupé
-            if email_configured:
-                st.divider()
-                recipients_with_email = [(i, m, s, e) for i, m, s, e in valid if e]
-                if recipients_with_email:
-                    st.subheader("📤 Envoi groupé")
-                    st.caption(
-                        f"{len(recipients_with_email)} destinataire(s) avec adresse email trouvé(s)"
-                    )
-                    if st.button(
-                        f"📤 Envoyer tous les emails ({len(recipients_with_email)})",
-                        type="primary",
-                        use_container_width=True,
-                    ):
-                        att_b, att_n = get_attachment()
-                        sent_ok, sent_fail = 0, []
-                        prog = st.progress(0)
-                        for step, (i, msg, subj, email_dest) in enumerate(recipients_with_email):
-                            try:
-                                send_email_smtp(
-                                    smtp_server, smtp_port, smtp_user, smtp_pass,
-                                    smtp_from, email_dest, subj, msg, att_b, att_n,
-                                )
-                                sent_ok += 1
-                            except Exception as e:
-                                sent_fail.append(f"{email_dest} : {e}")
-                            prog.progress((step + 1) / len(recipients_with_email))
-
-                        if sent_ok:
-                            st.success(f"✅ {sent_ok} email(s) envoyé(s)")
-                        if sent_fail:
-                            st.error("Erreurs :\n" + "\n".join(sent_fail))
+                    if is_titularisation:
+                        att_b_preview, att_n_preview = get_attachment_for_recipient(n, p)
+                        if att_b_preview and att_n_preview:
+                            st.download_button(
+                                "📎 Télécharger la pièce jointe générée",
+                                data=att_b_preview,
+                                file_name=att_n_preview,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"download_att_{i}",
+                            )
+                        else:
+                            st.caption("_Pièce jointe de titularisation indisponible pour ce collaborateur._")
 
 else:
     # ── Page d'accueil (aucun fichier) ──────────────────────
@@ -478,7 +411,7 @@ else:
         1. Choisissez le **type de message** dans la barre latérale
         2. **Importez** votre fichier Excel / CSV avec les colonnes collaborateurs
         3. Cliquez sur **Générer les messages**
-        4. **Téléchargez** le fichier texte ou **envoyez** directement par email
+        4. **Téléchargez** le fichier texte et les pièces jointes générées
 
         ---
         **Colonnes supportées dans votre fichier :**
