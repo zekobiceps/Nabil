@@ -109,8 +109,7 @@ def auto_map_columns(columns):
             mapping.setdefault("DATE_RENOUVELLEMENT", col)
         elif cu in ("INDIVIDU", "MATRICULE", "MAT", "MLE", "MLLE"):
             mapping.setdefault("INDIVIDU", col)
-        elif cu in ("CIVILITE", "TITRE", "CIVIL", "CIVILITÉ"):
-            mapping.setdefault("CIVILITE", col)
+        # civilité retirée — ne pas détecter la colonne CIVILITE
         elif "EMAIL" in cu or "MAIL" in cu:
             mapping.setdefault("EMAIL", col)
     return mapping
@@ -153,13 +152,18 @@ with st.sidebar:
     is_titularisation = msg_type.startswith("📄")
 
     st.caption("La durée d'essai est calculée automatiquement depuis DATE ENTREE et Renouvellement Date.")
-
     st.divider()
     # Civilité supprimée — ne plus demander la civilité par défaut
 
 # ═══════════════════════════════════════════════════════════
 # PAGE PRINCIPALE
 # ═══════════════════════════════════════════════════════════
+# si on change de mode, réinitialiser les messages précédemment générés
+if st.session_state.get("last_mode") is not None and st.session_state.get("last_mode") != is_titularisation:
+    for k in ("messages", "subjects", "df_gen", "gen_cols"):
+        st.session_state.pop(k, None)
+st.session_state["last_mode"] = is_titularisation
+
 st.title("📋 Générateur — Fin de Période d'Essai")
 mode_label = "Titularisation" if is_titularisation else "Prolongement Période d'Essai"
 st.caption(f"Mode actif : **{mode_label}**")
@@ -167,7 +171,6 @@ st.divider()
 
 # ── ÉTAPE 1 : Import ────────────────────────────────────────
 st.subheader("① Importer la liste des collaborateurs")
-st.caption("Colonnes attendues : NOM · PRENOM · LIB/POSTE · DATE ENTREE · Renouvellement Date (+ optionnel : LIB80/DIRECTION · SUP · INDIVIDU · EMAIL)")
 
 uploaded = st.file_uploader(
     "Charger le fichier Excel ou CSV",
@@ -218,9 +221,7 @@ if uploaded:
     if not required_ok:
         st.error("⚠️ Colonnes obligatoires introuvables : " + ", ".join(missing_required))
 
-    # ── ÉTAPE 2 : Pièce jointe ──────────────────────────────
-    st.subheader("② Pièce jointe email (optionnel)")
-
+    # Pièces jointes : génération automatique en mode titularisation
     ATTACHMENT_TITUL = resolve_attachment_path(
         "FR EPE - HICHMINE Mohamed Topographe.xlsx",
         name_prefix="FR EPE -",
@@ -230,27 +231,11 @@ if uploaded:
         name_prefix="Model PERIODE ESSAI",
     )
 
-    if is_titularisation:
-        default_att_path = ATTACHMENT_TITUL
-    else:
-        default_att_path = ATTACHMENT_PROLONG
-
-    use_default_att = os.path.exists(default_att_path)
+    default_att_path = ATTACHMENT_TITUL if is_titularisation else ATTACHMENT_PROLONG
+    # plus d'étape ② visible — la génération est automatique en mode titularisation
+    generate_att_auto = is_titularisation
     custom_att = None
-
-    if is_titularisation:
-        st.info("La pièce jointe est générée automatiquement pour chaque collaborateur après la section ④ Messages générés.")
-    else:
-        use_default_att = st.checkbox(
-            f"Utiliser **{os.path.basename(default_att_path)}** comme pièce jointe",
-            value=use_default_att,
-        )
-        if not use_default_att:
-            custom_att = st.file_uploader(
-                "Charger une autre pièce jointe",
-                type=["xlsx", "xls", "pdf", "doc", "docx"],
-                key="custom_att",
-            )
+    use_default_att = os.path.exists(default_att_path)
 
     def get_attachment_for_recipient(nom, prenom, poste=None, direction=None, sup=None, date_entree=None, date_tit=None):
         """Retourne un fichier binaire xlsx personnalisé pour le collaborateur.
@@ -259,7 +244,7 @@ if uploaded:
         par les valeurs fournies et on renvoie le fichier modifié en mémoire.
         """
         # cas titularisation : on personnalise à partir du template
-        if is_titularisation and os.path.exists(default_att_path):
+        if is_titularisation and generate_att_auto and os.path.exists(default_att_path):
             try:
                 wb = load_workbook(default_att_path)
                 replacements = {
@@ -390,13 +375,7 @@ if uploaded:
                 if is_titularisation
                 else f"messages_prolongement_{datetime.now().strftime('%Y%m%d')}.txt"
             )
-            st.download_button(
-                "⬇️ Télécharger tous les messages (.txt)",
-                data=all_text.encode("utf-8"),
-                file_name=filename_dl,
-                mime="text/plain",
-                use_container_width=True,
-            )
+            # téléchargement global supprimé (bouton .txt retiré)
 
             st.divider()
             st.subheader("④ Messages générés")
